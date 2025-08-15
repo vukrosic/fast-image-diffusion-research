@@ -113,8 +113,8 @@ def train_loop(
             noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps.cpu())
 
             with accelerator.accumulate(model):
-                # Changed: Transformer2DModel returns tensor directly, not dict
-                noise_pred = model(noisy_images, timestep=timesteps).sample
+                # UNet2DModel returns a dict with 'sample' key
+                noise_pred = model(noisy_images, timesteps).sample
                 loss = torch.nn.functional.mse_loss(noise_pred, noise)
                 accelerator.backward(loss)
 
@@ -144,15 +144,15 @@ def main():
     # Optionally, test model input/output shape
     sample_image = mnist_dataset[0]["images"].unsqueeze(0)
     print("Input shape:", sample_image.shape)
-    # Changed: use timestep as tensor for transformer
-    print('Output shape:', model(sample_image, timestep=torch.tensor([0])).sample.shape)
+    # Test UNet2DModel with timestep
+    print('Output shape:', model(sample_image, torch.tensor([0])).sample.shape)
 
     # Train
     train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_scheduler, max_steps=None)
 
     # Save model and scheduler
     os.makedirs("mnist_diffusion_ckpt", exist_ok=True)
-    model.save_pretrained("mnist_diffusion_ckpt/transformer")
+    model.save_pretrained("mnist_diffusion_ckpt/unet")
     print("Model saved to mnist_diffusion_ckpt/")
 
 if __name__ == "__main__":
