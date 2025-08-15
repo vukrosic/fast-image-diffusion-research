@@ -240,7 +240,7 @@ class DiT(nn.Module):
     def initialize_weights(self):
         # Initialize pos_embed with sin-cos embedding
         pos_embed = self.get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.x_embedder.n_patches**0.5))
-        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
+        self.pos_embed.data.copy_(pos_embed.float().unsqueeze(0))
 
         # Initialize patch_embed like nn.Linear with improved initialization
         w = self.x_embedder.proj.weight.data
