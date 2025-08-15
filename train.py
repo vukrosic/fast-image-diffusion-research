@@ -22,8 +22,9 @@ def set_seed(seed: int = 42):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    # Enable cudnn benchmark for better performance
+    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.benchmark = True
     print(f"🌱 Set all seeds to {seed}")
 
 @torch.compile
@@ -68,18 +69,18 @@ class Muon(torch.optim.Optimizer):
 @dataclass
 class TrainingConfig:
     # Image parameters
-    image_size = 32
-    train_batch_size = 64
-    eval_batch_size = 32
+    image_size = 64  # Increased for more compute
+    train_batch_size = 256  # Much larger batch for RTX 4090
+    eval_batch_size = 128
     num_epochs = 10
-    gradient_accumulation_steps = 4
+    gradient_accumulation_steps = 1  # Reduced since batch is larger
     seed = 0
     
     # Transformer specific configs
-    patch_size = 4
-    hidden_size = 384
-    num_layers = 6
-    num_heads = 6
+    patch_size = 8  # Larger patches for efficiency
+    hidden_size = 768  # Doubled model size
+    num_layers = 12  # More layers
+    num_heads = 12  # More attention heads
     mlp_ratio = 4.0
     dropout = 0.1
     
@@ -90,16 +91,19 @@ class TrainingConfig:
     grad_clip = 1.0
     
     # Training parameters
-    max_steps = 5000
+    max_steps = None  # Will be calculated from epochs
     eval_every = 500
     warmup_ratio = 0.05
     
     # Technical
     use_amp = True
-    mixed_precision = 'fp16'
+    mixed_precision = 'bf16'  # Better for RTX 4090
+    compile_model = True  # Enable torch.compile for speed
     
     def __post_init__(self):
-        self.warmup_steps = int(self.max_steps * self.warmup_ratio)
+        # max_steps will be set based on dataset size and epochs
+        if self.max_steps is not None:
+            self.warmup_steps = int(self.max_steps * self.warmup_ratio)
         assert self.hidden_size % self.num_heads == 0, "hidden_size must be divisible by num_heads"
 
 config = TrainingConfig()
@@ -121,6 +125,10 @@ def get_dataloader():
         mnist_dataset,
         batch_size=config.train_batch_size,
         shuffle=True,
+        num_workers=8,  # Parallel data loading
+        pin_memory=True,  # Faster GPU transfer
+        persistent_workers=True,  # Keep workers alive
+        prefetch_factor=4,  # Prefetch batches
     ), mnist_dataset
 
 class PatchEmbed(nn.Module):
@@ -384,15 +392,17 @@ def setup_muon_optimizer(model: nn.Module, config: TrainingConfig):
 def get_noise_scheduler():
     return diffusers.DDPMScheduler(num_train_timesteps=200)
 
-def get_lr_schedulers(optimizers, config: TrainingConfig):
+def get_lr_schedulers(optimizers, config: TrainingConfig, total_steps: int):
     """Create learning rate schedulers for all optimizers"""
     schedulers = []
+    warmup_steps = int(total_steps * config.warmup_ratio)
+    
     for optimizer in optimizers:
         def lr_lambda(step):
-            if step < config.warmup_steps:
-                return step / config.warmup_steps
+            if step < warmup_steps:
+                return step / warmup_steps
             else:
-                progress = (step - config.warmup_steps) / (config.max_steps - config.warmup_steps)
+                progress = (step - warmup_steps) / (total_steps - warmup_steps)
                 return 0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * progress))
         
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
@@ -407,27 +417,38 @@ def train_loop(config: TrainingConfig, model, noise_scheduler, train_dataloader)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
     
+    # Calculate total steps based on epochs
+    steps_per_epoch = len(train_dataloader) // config.gradient_accumulation_steps
+    total_steps = steps_per_epoch * config.num_epochs
+    print(f"  📊 Training for {config.num_epochs} epochs ({total_steps:,} steps)")
+    
+    # Compile model for better performance
+    if config.compile_model:
+        print("🔥 Compiling model with torch.compile...")
+        model = torch.compile(model, mode='max-autotune')
+    
     total_params = sum(p.numel() for p in model.parameters())
     print(f"  📊 Total parameters: {total_params:,}")
     
     # Setup optimizers and schedulers
     optimizers = setup_muon_optimizer(model, config)
-    schedulers = get_lr_schedulers(optimizers, config)
+    schedulers = get_lr_schedulers(optimizers, config, total_steps)
     
-    # Mixed precision scaler
-    scaler = GradScaler() if config.use_amp else None
+    # Mixed precision scaler - use bfloat16 for RTX 4090
+    scaler = GradScaler() if config.use_amp and config.mixed_precision == 'fp16' else None
+    use_autocast = config.use_amp
+    autocast_dtype = torch.bfloat16 if config.mixed_precision == 'bf16' else torch.float16
     
     # Training loop
     model.train()
     step = 0
     best_loss = float('inf')
     
-    pbar = tqdm(total=config.max_steps, desc="Training DiT")
+    pbar = tqdm(total=total_steps, desc="Training DiT")
     
-    while step < config.max_steps:
+    for epoch in range(config.num_epochs):
+        print(f"\n📅 Epoch {epoch + 1}/{config.num_epochs}")
         for batch in train_dataloader:
-            if step >= config.max_steps:
-                break
                 
             clean_images = batch['images'].to(device)
             noise = torch.randn_like(clean_images)
@@ -444,12 +465,16 @@ def train_loop(config: TrainingConfig, model, noise_scheduler, train_dataloader)
             noisy_images = noisy_images.to(device)
             
             # Forward pass with gradient accumulation
-            if config.use_amp:
-                with autocast():
+            if use_autocast:
+                with autocast(dtype=autocast_dtype):
                     noise_pred = model(noisy_images, timesteps)
                     loss = F.mse_loss(noise_pred, noise)
                     loss = loss / config.gradient_accumulation_steps
-                scaler.scale(loss).backward()
+                
+                if scaler is not None:
+                    scaler.scale(loss).backward()
+                else:
+                    loss.backward()
             else:
                 noise_pred = model(noisy_images, timesteps)
                 loss = F.mse_loss(noise_pred, noise)
@@ -458,7 +483,7 @@ def train_loop(config: TrainingConfig, model, noise_scheduler, train_dataloader)
             
             # Optimizer step after accumulation
             if (step + 1) % config.gradient_accumulation_steps == 0:
-                if config.use_amp:
+                if scaler is not None:
                     # Unscale gradients for clipping
                     for optimizer in optimizers:
                         scaler.unscale_(optimizer)
@@ -501,6 +526,12 @@ def train_loop(config: TrainingConfig, model, noise_scheduler, train_dataloader)
             step += 1
             if step % 100 == 0:
                 pbar.update(100)
+            
+            if step >= total_steps:
+                break
+        
+        if step >= total_steps:
+            break
     
     pbar.close()
     print(f"  🏆 Best loss: {best_loss:.4f}")
@@ -512,6 +543,15 @@ def main():
     if torch.cuda.is_available():
         print(f"GPU: {torch.cuda.get_device_name()}")
         print(f"Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+        
+        # Optimize GPU settings
+        torch.cuda.empty_cache()
+        torch.cuda.set_per_process_memory_fraction(0.95)  # Use 95% of GPU memory
+        
+        # Enable TensorFloat-32 for RTX 4090
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        print("🚀 Enabled TF32 for faster training")
     
     # Set seed for reproducibility
     set_seed(config.seed)
