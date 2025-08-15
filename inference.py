@@ -17,8 +17,8 @@ def load_model_and_config(checkpoint_dir="cifar10_diffusion_ckpt"):
     """Load the trained model and config"""
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    # Load config
-    config = torch.load(f"{checkpoint_dir}/config.pth", map_location=device)
+    # Load config with weights_only=False for compatibility
+    config = torch.load(f"{checkpoint_dir}/config.pth", map_location=device, weights_only=False)
     print(f"📋 Loaded config: {config.hidden_size}d, {config.num_layers}L, {config.num_heads}H")
     
     # Create model
@@ -34,7 +34,7 @@ def load_model_and_config(checkpoint_dir="cifar10_diffusion_ckpt"):
     )
     
     # Load weights
-    state_dict = torch.load(f"{checkpoint_dir}/dit_model.pth", map_location=device)
+    state_dict = torch.load(f"{checkpoint_dir}/dit_model.pth", map_location=device, weights_only=True)
     model.load_state_dict(state_dict)
     model = model.to(device)
     model.eval()
