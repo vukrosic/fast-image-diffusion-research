@@ -41,23 +41,25 @@ def get_dataloader():
     ), mnist_dataset
 
 def get_model():
-    # Changed to Transformer2DModel
-    return diffusers.Transformer2DModel(
-        num_attention_heads=8,
-        attention_head_dim=32,
+    # Using UNet2DModel for unconditional generation
+    return diffusers.UNet2DModel(
+        sample_size=config.image_size,
         in_channels=1,
         out_channels=1,
-        num_layers=4,
-        dropout=0.0,
-        norm_num_groups=32,
-        cross_attention_dim=None,
-        attention_bias=True,
-        sample_size=config.image_size,
-        patch_size=2,
-        activation_fn="geglu",
-        num_embeds_ada_norm=1000,  # for timestep conditioning
-        norm_type="ada_norm_zero",
-        norm_elementwise_affine=False,
+        layers_per_block=2,
+        block_out_channels=(64, 128, 128, 256),
+        down_block_types=(
+            "DownBlock2D",
+            "DownBlock2D", 
+            "DownBlock2D",
+            "DownBlock2D",
+        ),
+        up_block_types=(
+            "UpBlock2D",
+            "UpBlock2D",
+            "UpBlock2D",
+            "UpBlock2D",
+        ),
     )
 
 def get_noise_scheduler():
