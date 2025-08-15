@@ -114,7 +114,8 @@ def transform(dataset):
         torchvision.transforms.ToTensor(),
         torchvision.transforms.Lambda(lambda x: 2 * (x - 0.5)),
     ])
-    images = [preprocess(image) for image in dataset["image"]]
+    # CIFAR-10 uses "img" key instead of "image"
+    images = [preprocess(image) for image in dataset["img"]]
     return {"images": images}
 
 def get_dataloader():
