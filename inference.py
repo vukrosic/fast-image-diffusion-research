@@ -35,6 +35,16 @@ def load_model_and_config(checkpoint_dir="cifar10_diffusion_ckpt"):
     
     # Load weights
     state_dict = torch.load(f"{checkpoint_dir}/dit_model.pth", map_location=device, weights_only=True)
+    
+    # Remove _orig_mod. prefix from torch.compile
+    if any(key.startswith('_orig_mod.') for key in state_dict.keys()):
+        print("🔧 Removing torch.compile prefixes from state dict...")
+        new_state_dict = {}
+        for key, value in state_dict.items():
+            new_key = key.replace('_orig_mod.', '')
+            new_state_dict[new_key] = value
+        state_dict = new_state_dict
+    
     model.load_state_dict(state_dict)
     model = model.to(device)
     model.eval()
