@@ -61,7 +61,7 @@ def get_model():
     )
 
 def get_noise_scheduler():
-    return diffusers.DDPMScheduler(num_train_timesteps=200, tensor_format='pt')
+    return diffusers.DDPMScheduler(num_train_timesteps=200)
 
 def get_optimizer(model):
     return torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
