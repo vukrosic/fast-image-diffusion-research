@@ -2,6 +2,10 @@
 
 A high-performance diffusion transformer (DiT) for generating CIFAR-10 images, optimized for RTX 4090.
 
+- YouTube - https://youtu.be/VNuoE0i8lZs
+
+- Bilibili - https://www.bilibili.com/video/BV1zxbWz9Efo/
+
 ## Quick Start
 
 ```bash
