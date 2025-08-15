@@ -192,7 +192,8 @@ class DiTBlock(nn.Module):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
         
         # Attention with residual connection and dropout
-        attn_out = self.attn(self.modulate(self.norm1(x), shift_msa, scale_msa))[0]
+        normalized_x = self.modulate(self.norm1(x), shift_msa, scale_msa)
+        attn_out = self.attn(normalized_x, normalized_x, normalized_x)[0]
         x = x + self.dropout(gate_msa.unsqueeze(1) * attn_out)
         
         # MLP with residual connection and dropout
