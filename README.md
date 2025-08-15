@@ -29,7 +29,7 @@ python generate.py --num_images 16 --steps 50
 ## Requirements
 
 ```bash
-pip install torch torchvision datasets diffusers accelerate tqdm matplotlib pillow
+pip install datasets diffusers accelerate tqdm matplotlib pillow
 ```
 
 ## Model Details
