@@ -118,18 +118,18 @@ def transform(dataset):
     return {"images": images}
 
 def get_dataloader():
-    mnist_dataset = datasets.load_dataset('mnist', split='train')
-    mnist_dataset.reset_format()
-    mnist_dataset.set_transform(transform)
+    cifar10_dataset = datasets.load_dataset('cifar10', split='train')
+    cifar10_dataset.reset_format()
+    cifar10_dataset.set_transform(transform)
     return torch.utils.data.DataLoader(
-        mnist_dataset,
+        cifar10_dataset,
         batch_size=config.train_batch_size,
         shuffle=True,
         num_workers=8,  # Parallel data loading
         pin_memory=True,  # Faster GPU transfer
         persistent_workers=True,  # Keep workers alive
         prefetch_factor=4,  # Prefetch batches
-    ), mnist_dataset
+    ), cifar10_dataset
 
 class PatchEmbed(nn.Module):
     def __init__(self, img_size, patch_size, in_chans, embed_dim):
@@ -353,7 +353,7 @@ def get_model():
     return DiT(
         input_size=config.image_size,
         patch_size=config.patch_size,
-        in_channels=1,
+        in_channels=3,  # RGB channels for CIFAR-10
         hidden_size=config.hidden_size,
         depth=config.num_layers,
         num_heads=config.num_heads,
@@ -425,7 +425,7 @@ def train_loop(config: TrainingConfig, model, noise_scheduler, train_dataloader)
     # Compile model for better performance
     if config.compile_model:
         print("🔥 Compiling model with torch.compile...")
-        model = torch.compile(model, mode='max-autotune')
+        model = torch.compile(model, mode='reduce-overhead')
     
     total_params = sum(p.numel() for p in model.parameters())
     print(f"  📊 Total parameters: {total_params:,}")
@@ -557,8 +557,8 @@ def main():
     set_seed(config.seed)
     
     # Load data
-    train_dataloader, mnist_dataset = get_dataloader()
-    print(f"📊 Dataset: {len(mnist_dataset)} samples, {len(train_dataloader)} batches")
+    train_dataloader, cifar10_dataset = get_dataloader()
+    print(f"📊 Dataset: {len(cifar10_dataset)} samples, {len(train_dataloader)} batches")
     
     # Initialize model
     model = get_model()
@@ -566,7 +566,7 @@ def main():
     
     # Test model shapes
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    sample_image = mnist_dataset[0]["images"].unsqueeze(0).to(device)
+    sample_image = cifar10_dataset[0]["images"].unsqueeze(0).to(device)
     model_test = model.to(device)
     
     print(f"Input shape: {sample_image.shape}")
@@ -590,10 +590,10 @@ def main():
     print(f"  ⏱️ Training completed in {training_time/60:.1f} minutes")
     
     # Save model and config
-    os.makedirs("mnist_diffusion_ckpt", exist_ok=True)
-    torch.save(trained_model.state_dict(), "mnist_diffusion_ckpt/dit_model.pth")
-    torch.save(config, "mnist_diffusion_ckpt/config.pth")
-    print(f"💾 Model saved to mnist_diffusion_ckpt/")
+    os.makedirs("cifar10_diffusion_ckpt", exist_ok=True)
+    torch.save(trained_model.state_dict(), "cifar10_diffusion_ckpt/dit_model.pth")
+    torch.save(config, "cifar10_diffusion_ckpt/config.pth")
+    print(f"💾 Model saved to cifar10_diffusion_ckpt/")
     
     print(f"\n🎉 TRAINING COMPLETED!")
     print(f"⏱️ Total time: {training_time/60:.1f} minutes")
