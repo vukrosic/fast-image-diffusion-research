@@ -84,11 +84,6 @@ class TrainingConfig:
     mlp_ratio = 4.0
     dropout = 0.1
     
-    # Conditioning parameters
-    num_classes = 10  # CIFAR-10 has 10 classes
-    cfg_prob = 0.1  # 10% chance to drop labels for classifier-free guidance
-    cfg_scale = 3.0  # Guidance scale for inference
-    
     # Optimizer parameters
     muon_lr = 0.01
     adamw_lr_ratio = 0.1
@@ -113,12 +108,6 @@ class TrainingConfig:
 
 config = TrainingConfig()
 
-# CIFAR-10 class names for visualization
-CIFAR10_CLASSES = [
-    'airplane', 'automobile', 'bird', 'cat', 'deer',
-    'dog', 'frog', 'horse', 'ship', 'truck'
-]
-
 def transform(dataset):
     preprocess = torchvision.transforms.Compose([
         torchvision.transforms.Resize((config.image_size, config.image_size)),
@@ -127,8 +116,7 @@ def transform(dataset):
     ])
     # CIFAR-10 uses "img" key instead of "image"
     images = [preprocess(image) for image in dataset["img"]]
-    labels = dataset["label"]  # CIFAR-10 labels (0-9)
-    return {"images": images, "labels": labels}
+    return {"images": images}
 
 def get_dataloader():
     cifar10_dataset = datasets.load_dataset('cifar10', split='train')
@@ -228,8 +216,7 @@ class DiTBlock(nn.Module):
 
 class DiT(nn.Module):
     def __init__(self, input_size=32, patch_size=4, in_channels=1, hidden_size=384, 
-                 depth=6, num_heads=6, mlp_ratio=4.0, dropout=0.1, 
-                 num_classes=10):  # Add num_classes parameter
+                 depth=6, num_heads=6, mlp_ratio=4.0, dropout=0.1):
         super().__init__()
         self.input_size = input_size
         self.patch_size = patch_size
@@ -239,22 +226,11 @@ class DiT(nn.Module):
 
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size)
         self.t_embedder = TimestepEmbedder(hidden_size)
-        
-        # Add label embedder (after t_embedder)
-        self.label_embedder = nn.Embedding(num_classes + 1, hidden_size)  # +1 for unconditional
-        
         num_patches = self.x_embedder.n_patches
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
 
         # Add input dropout
         self.input_dropout = nn.Dropout(dropout)
-
-        # Modify condition embedder to combine timestep + label
-        self.condition_embedder = nn.Sequential(
-            nn.Linear(hidden_size * 2, hidden_size),  # Combine t and label
-            nn.SiLU(),
-            nn.Linear(hidden_size, hidden_size)
-        )
 
         self.blocks = nn.ModuleList([
             DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, dropout=dropout) for _ in range(depth)
@@ -284,9 +260,6 @@ class DiT(nn.Module):
         # Initialize timestep embedding MLP with smaller std
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
-        
-        # Initialize label embedder
-        nn.init.normal_(self.label_embedder.weight, std=0.02)
 
         # Initialize all linear layers properly
         def _init_weights(module):
@@ -353,29 +326,21 @@ class DiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
         return imgs
 
-    def forward(self, x, t, y=None):  # Add y for labels
+    def forward(self, x, t):
         # Patch embedding with scaling (like in transformers)
         x = self.x_embedder(x) * math.sqrt(self.x_embedder.proj.out_channels)
         x = x + self.pos_embed
         x = self.input_dropout(x)
         
         # Timestep embedding
-        t_emb = self.t_embedder(t)
+        t = self.t_embedder(t)
         
-        # Label embedding (with classifier-free guidance support)
-        if y is None:
-            y = torch.full((t.shape[0],), self.label_embedder.num_embeddings - 1, device=t.device)
-        y_emb = self.label_embedder(y)
-        
-        # Combine timestep and label embeddings
-        c = self.condition_embedder(torch.cat([t_emb, y_emb], dim=-1))
-        
-        # Pass through transformer blocks with combined conditioning
+        # Transformer blocks
         for block in self.blocks:
-            x = block(x, c)
+            x = block(x, t)
         
         # Final layer with adaptive normalization
-        shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
+        shift, scale = self.adaLN_modulation(t).chunk(2, dim=1)
         x = self.modulate(self.final_layer[0](x), shift, scale)
         x = self.final_layer[1](x)
         x = self.unpatchify(x)
@@ -385,7 +350,7 @@ class DiT(nn.Module):
         return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 def get_model():
-    # Using DiT (Diffusion Transformer) for conditional generation
+    # Using DiT (Diffusion Transformer) for unconditional generation
     return DiT(
         input_size=config.image_size,
         patch_size=config.patch_size,
@@ -394,8 +359,7 @@ def get_model():
         depth=config.num_layers,
         num_heads=config.num_heads,
         mlp_ratio=config.mlp_ratio,
-        dropout=config.dropout,
-        num_classes=config.num_classes  # Add this
+        dropout=config.dropout
     )
 
 def setup_muon_optimizer(model: nn.Module, config: TrainingConfig):
@@ -447,38 +411,9 @@ def get_lr_schedulers(optimizers, config: TrainingConfig, total_steps: int):
     
     return schedulers
 
-@torch.no_grad()
-def sample_with_label(model, noise_scheduler, label, num_samples=4, 
-                      cfg_scale=3.0, device='cuda'):
-    """Generate images for a specific CIFAR-10 class"""
-    model.eval()
-    
-    # Start with random noise
-    shape = (num_samples, 3, config.image_size, config.image_size)
-    x = torch.randn(shape, device=device)
-    
-    # Create label tensor
-    labels = torch.full((num_samples,), label, device=device, dtype=torch.long)
-    
-    # Denoise step by step
-    for t in tqdm(reversed(range(noise_scheduler.num_train_timesteps)), desc=f"Sampling {CIFAR10_CLASSES[label]}"):
-        timesteps = torch.full((num_samples,), t, device=device, dtype=torch.long)
-        
-        # Predict noise with and without conditioning (for CFG)
-        noise_pred_cond = model(x, timesteps, labels)
-        noise_pred_uncond = model(x, timesteps, None)
-        
-        # Apply classifier-free guidance
-        noise_pred = noise_pred_uncond + cfg_scale * (noise_pred_cond - noise_pred_uncond)
-        
-        # Remove noise
-        x = noise_scheduler.step(noise_pred, t, x).prev_sample
-    
-    return x
-
 def train_loop(config: TrainingConfig, model, noise_scheduler, train_dataloader):
     """Optimized training loop with Muon optimizer and mixed precision"""
-    print(f"\n🚀 Training DiT with Muon optimizer and label conditioning")
+    print(f"\n🚀 Training DiT with Muon optimizer")
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
@@ -510,14 +445,13 @@ def train_loop(config: TrainingConfig, model, noise_scheduler, train_dataloader)
     step = 0
     best_loss = float('inf')
     
-    pbar = tqdm(total=total_steps, desc="Training DiT with Labels")
+    pbar = tqdm(total=total_steps, desc="Training DiT")
     
     for epoch in range(config.num_epochs):
         print(f"\n📅 Epoch {epoch + 1}/{config.num_epochs}")
         for batch in train_dataloader:
                 
             clean_images = batch['images'].to(device)
-            labels = batch['labels'].to(device)  # Get labels
             noise = torch.randn_like(clean_images)
             batch_size = clean_images.shape[0]
             
@@ -531,14 +465,10 @@ def train_loop(config: TrainingConfig, model, noise_scheduler, train_dataloader)
             noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps.cpu())
             noisy_images = noisy_images.to(device)
             
-            # Randomly drop labels for classifier-free guidance
-            if random.random() < config.cfg_prob:
-                labels = None  # Model will use unconditional token
-            
             # Forward pass with gradient accumulation
             if use_autocast:
                 with autocast(dtype=autocast_dtype):
-                    noise_pred = model(noisy_images, timesteps, labels)  # Pass labels
+                    noise_pred = model(noisy_images, timesteps)
                     loss = F.mse_loss(noise_pred, noise)
                     loss = loss / config.gradient_accumulation_steps
                 
@@ -547,7 +477,7 @@ def train_loop(config: TrainingConfig, model, noise_scheduler, train_dataloader)
                 else:
                     loss.backward()
             else:
-                noise_pred = model(noisy_images, timesteps, labels)  # Pass labels
+                noise_pred = model(noisy_images, timesteps)
                 loss = F.mse_loss(noise_pred, noise)
                 loss = loss / config.gradient_accumulation_steps
                 loss.backward()
@@ -638,13 +568,11 @@ def main():
     # Test model shapes
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     sample_image = cifar10_dataset[0]["images"].unsqueeze(0).to(device)
-    sample_label = torch.tensor([cifar10_dataset[0]["labels"]]).to(device)
     model_test = model.to(device)
     
     print(f"Input shape: {sample_image.shape}")
-    print(f"Label: {sample_label.item()} ({CIFAR10_CLASSES[sample_label.item()]})")
     with torch.no_grad():
-        test_output = model_test(sample_image, torch.tensor([0]).to(device), sample_label)
+        test_output = model_test(sample_image, torch.tensor([0]).to(device))
         print(f'Output shape: {test_output.shape}')
     
     print(f"\n📋 Training Configuration:")
@@ -652,7 +580,6 @@ def main():
     print(f"   Training: {config.max_steps} steps, batch size {config.train_batch_size}")
     print(f"   Patch size: {config.patch_size}x{config.patch_size}")
     print(f"   Muon LR: {config.muon_lr}, AdamW LR: {config.muon_lr * config.adamw_lr_ratio}")
-    print(f"   Classes: {config.num_classes}, CFG prob: {config.cfg_prob}, CFG scale: {config.cfg_scale}")
     
     # Train model
     import time
@@ -669,33 +596,8 @@ def main():
     torch.save(config, "cifar10_diffusion_ckpt/config.pth")
     print(f"💾 Model saved to cifar10_diffusion_ckpt/")
     
-    # Demo: Generate samples for each class
-    print(f"\n🎨 Generating sample images for each CIFAR-10 class...")
-    trained_model.eval()
-    
-    for class_idx in range(config.num_classes):
-        print(f"Generating {CIFAR10_CLASSES[class_idx]} (class {class_idx})...")
-        samples = sample_with_label(
-            trained_model, 
-            noise_scheduler, 
-            label=class_idx, 
-            num_samples=1, 
-            cfg_scale=config.cfg_scale,
-            device=device
-        )
-        
-        # Save sample (optional - you can add torchvision.utils.save_image here)
-        # torchvision.utils.save_image(
-        #     samples, 
-        #     f"cifar10_diffusion_ckpt/sample_{CIFAR10_CLASSES[class_idx]}.png",
-        #     normalize=True, 
-        #     value_range=(-1, 1)
-        # )
-    
     print(f"\n🎉 TRAINING COMPLETED!")
     print(f"⏱️ Total time: {training_time/60:.1f} minutes")
-    print(f"🎯 Model can now generate specific CIFAR-10 classes!")
-    print(f"🔧 Use sample_with_label(model, scheduler, label=X) to generate class X")
 
 if __name__ == "__main__":
     main()
