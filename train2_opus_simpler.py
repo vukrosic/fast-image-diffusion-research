@@ -183,7 +183,7 @@ def train():
     
     # Model
     model = MinimalUNet(ch=128).to(device)  # Increased channels for better quality
-    model = torch.compile(model, mode="reduce-overhead")  # PyTorch 2.0+
+    # Note: torch.compile disabled due to dynamic channel concatenation in UNet decoder
     ddpm = DDPM(model, device, T)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     
