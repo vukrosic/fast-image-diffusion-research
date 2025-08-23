@@ -49,8 +49,8 @@ class DistributedTrainingConfig(TrainingConfig):
     local_rank: int = 0  # Will be set by launcher
     
     # Adjusted for distributed training - increased to better utilize 24GB RTX 4090s
-    train_batch_size = 96  # Per GPU batch size (total = 96 * 8 = 768) 
-    eval_batch_size = 48   # Per GPU eval batch size
+    train_batch_size = 160  # Per GPU batch size (total = 96 * 8 = 768) 
+    eval_batch_size = 96   # Per GPU eval batch size
     gradient_accumulation_steps = 1  # Keep as 1 since we have more GPUs
     
     # Increased model size to utilize more GPU memory
