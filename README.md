@@ -1,5 +1,9 @@
 # Fast Image Diffusion Research
 
+- YouTube - https://youtu.be/ZjTBcC8PYMo
+
+- Bilibili - https://www.bilibili.com/video/BV1szevzVEEm/
+
 I recommend using this in AI code IDE and asking it questions about it.
 
 Gemini CLI or Client + Cerebras is free.
