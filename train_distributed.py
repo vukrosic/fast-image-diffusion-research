@@ -63,7 +63,7 @@ class DistributedTrainingConfig(TrainingConfig):
     enable_amp = True     # Mixed precision training for memory efficiency
     
     # Extended training for better convergence
-    num_epochs = 2  # Increased 10x for longer training (was 5)
+    num_epochs = 50  # Increased 10x for longer training (was 5)
     
     def __post_init__(self):
         super().__post_init__()
