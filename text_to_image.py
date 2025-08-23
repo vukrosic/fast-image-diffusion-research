@@ -15,6 +15,7 @@ from PIL import Image
 import os
 from inference import load_model_and_config, generate_images, save_image_grid
 from train import TrainingConfig, CIFAR10_CLASSES
+import diffusers
 
 # Word mappings to CIFAR-10 classes
 WORD_MAPPINGS = {
