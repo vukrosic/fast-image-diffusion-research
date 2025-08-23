@@ -76,35 +76,76 @@ def load_model_and_config(checkpoint_dir):
     import torch
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    # Load config
-    config_path = os.path.join(checkpoint_dir, 'config.pth')
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-    config = torch.load(config_path, map_location=device, weights_only=False)
+    # First try to load from distributed training checkpoint (latest_checkpoint.pth)
+    latest_checkpoint_path = os.path.join(checkpoint_dir, 'latest_checkpoint.pth')
+    if os.path.exists(latest_checkpoint_path):
+        print(f"📥 Loading distributed training checkpoint from {latest_checkpoint_path}")
+        checkpoint = torch.load(latest_checkpoint_path, map_location=device, weights_only=False)
+        
+        # Extract config from checkpoint
+        config = checkpoint.get('config')
+        if config is None:
+            # Try loading config separately if not in checkpoint
+            config_path = os.path.join(checkpoint_dir, 'config.pth')
+            if os.path.exists(config_path):
+                config = torch.load(config_path, map_location=device, weights_only=False)
+            else:
+                raise FileNotFoundError(f"Config not found in checkpoint or separate file")
+        
+        # Create model
+        model = DiT(
+            input_size=config.image_size,
+            patch_size=config.patch_size,
+            in_channels=3,
+            hidden_size=config.hidden_size,
+            depth=config.num_layers,
+            num_heads=config.num_heads,
+            mlp_ratio=config.mlp_ratio,
+            dropout=config.dropout,
+            num_classes=config.num_classes
+        )
+        
+        # Load model weights from checkpoint
+        model.load_state_dict(checkpoint['model_state_dict'])
+        model = model.to(device)
+        model.eval()
+        
+        print(f"✅ Loaded model from epoch {checkpoint.get('epoch', 'unknown')}")
+        return model, config, device
     
-    # Create model
-    model = DiT(
-        input_size=config.image_size,
-        patch_size=config.patch_size,
-        in_channels=3,
-        hidden_size=config.hidden_size,
-        depth=config.num_layers,
-        num_heads=config.num_heads,
-        mlp_ratio=config.mlp_ratio,
-        dropout=config.dropout,
-        num_classes=config.num_classes
-    )
-    
-    # Load model weights
-    model_path = os.path.join(checkpoint_dir, 'dit_model.pth')
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model file not found: {model_path}")
-    
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=False))
-    model = model.to(device)
-    model.eval()
-    
-    return model, config, device
+    # Fallback to old format (separate files)
+    else:
+        print(f"📥 Loading from separate checkpoint files in {checkpoint_dir}")
+        
+        # Load config
+        config_path = os.path.join(checkpoint_dir, 'config.pth')
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"Config file not found: {config_path}")
+        config = torch.load(config_path, map_location=device, weights_only=False)
+        
+        # Create model
+        model = DiT(
+            input_size=config.image_size,
+            patch_size=config.patch_size,
+            in_channels=3,
+            hidden_size=config.hidden_size,
+            depth=config.num_layers,
+            num_heads=config.num_heads,
+            mlp_ratio=config.mlp_ratio,
+            dropout=config.dropout,
+            num_classes=config.num_classes
+        )
+        
+        # Load model weights
+        model_path = os.path.join(checkpoint_dir, 'dit_model.pth')
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model file not found: {model_path}")
+        
+        model.load_state_dict(torch.load(model_path, map_location=device, weights_only=False))
+        model = model.to(device)
+        model.eval()
+        
+        return model, config, device
 
 def save_image_grid(images, filename, nrow=4):
     """Save a grid of images"""
@@ -136,7 +177,7 @@ def generate_images(model, scheduler, class_idx, num_images, cfg_scale, device):
     
     return image
 
-def generate_images_from_text(prompt, num_images=4, steps=50, checkpoint_dir="cifar10_diffusion_ckpt"):
+def generate_images_from_text(prompt, num_images=4, steps=50, checkpoint_dir="cifar10_diffusion_distributed_ckpt"):
     """Generate images based on text prompt"""
     print(f"🎨 Generating images for prompt: '{prompt}'")
     
@@ -219,7 +260,7 @@ def main():
     parser.add_argument('--num_images', type=int, default=4, help='Number of images to generate')
     parser.add_argument('--steps', type=int, default=50, help='Number of denoising steps')
     parser.add_argument('--output', type=str, default='text_generated.png', help='Output filename')
-    parser.add_argument('--checkpoint', type=str, default='cifar10_diffusion_ckpt', help='Checkpoint directory')
+    parser.add_argument('--checkpoint', type=str, default='cifar10_diffusion_distributed_ckpt', help='Checkpoint directory')
     
     args = parser.parse_args()
     
