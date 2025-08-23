@@ -14,12 +14,7 @@ import torchvision
 from PIL import Image
 import os
 from inference import load_model_and_config, generate_images, save_image_grid
-
-# CIFAR-10 class names
-CIFAR10_CLASSES = [
-    'airplane', 'automobile', 'bird', 'cat', 'deer',
-    'dog', 'frog', 'horse', 'ship', 'truck'
-]
+from train import TrainingConfig, CIFAR10_CLASSES
 
 # Word mappings to CIFAR-10 classes
 WORD_MAPPINGS = {
