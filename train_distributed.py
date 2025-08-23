@@ -70,6 +70,10 @@ class DistributedTrainingConfig(TrainingConfig):
     resume_from_checkpoint = ""  # Path to checkpoint directory to resume from
     checkpoint_dir = "cifar10_diffusion_distributed_ckpt"  # Where to save checkpoints
     
+    # Debug settings
+    save_debug_samples = True  # Save sample images with labels for verification
+    debug_samples_count = 16   # Number of debug samples to save
+    
     def __post_init__(self):
         super().__post_init__()
         # Set local rank from environment if available
@@ -187,6 +191,85 @@ def find_latest_checkpoint(checkpoint_dir):
         return os.path.join(checkpoint_dir, checkpoint_files[-1])
     
     return None
+
+def save_debug_samples(images, labels, epoch, step, checkpoint_dir, rank):
+    """Save sample images with their labels for debugging data pipeline"""
+    if rank != 0:  # Only save from rank 0
+        return
+    
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
+    
+    # Create debug directory
+    debug_dir = os.path.join(checkpoint_dir, "debug_samples")
+    os.makedirs(debug_dir, exist_ok=True)
+    
+    # Convert tensors to numpy and denormalize
+    images_np = images.detach().cpu().numpy()
+    labels_np = labels.detach().cpu().numpy()
+    
+    # Denormalize images from [-1, 1] to [0, 1]
+    images_np = (images_np + 1.0) / 2.0
+    images_np = np.transpose(images_np, (0, 2, 3, 1))  # NCHW -> NHWC
+    
+    # Create a grid of images with labels
+    num_samples = min(len(images_np), 16)  # Show up to 16 samples
+    fig, axes = plt.subplots(4, 4, figsize=(12, 12))
+    fig.suptitle(f'Training Data Debug - Epoch {epoch+1}, Step {step}', fontsize=16)
+    
+    for i in range(16):
+        row, col = i // 4, i % 4
+        ax = axes[row, col]
+        
+        if i < num_samples:
+            # Show image
+            ax.imshow(images_np[i])
+            
+            # Add label information
+            label_idx = labels_np[i]
+            class_name = CIFAR10_CLASSES[label_idx]
+            ax.set_title(f'Label: {label_idx}\nClass: {class_name}', fontsize=10)
+            
+            # Add colored border based on class
+            colors = ['red', 'blue', 'green', 'orange', 'purple', 
+                     'brown', 'pink', 'gray', 'olive', 'cyan']
+            border_color = colors[label_idx % len(colors)]
+            rect = patches.Rectangle((0, 0), 31, 31, linewidth=2, 
+                                   edgecolor=border_color, facecolor='none')
+            ax.add_patch(rect)
+        else:
+            ax.axis('off')
+        
+        ax.set_xticks([])
+        ax.set_yticks([])
+    
+    plt.tight_layout()
+    
+    # Save the debug image
+    debug_filename = f"debug_epoch_{epoch+1:03d}_step_{step:05d}.png"
+    debug_path = os.path.join(debug_dir, debug_filename)
+    plt.savefig(debug_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    # Also save a text file with detailed label information
+    txt_filename = f"debug_epoch_{epoch+1:03d}_step_{step:05d}.txt"
+    txt_path = os.path.join(debug_dir, txt_filename)
+    
+    with open(txt_path, 'w') as f:
+        f.write(f"Training Data Debug - Epoch {epoch+1}, Step {step}\n")
+        f.write("=" * 50 + "\n\n")
+        
+        for i in range(num_samples):
+            label_idx = labels_np[i]
+            class_name = CIFAR10_CLASSES[label_idx]
+            f.write(f"Image {i+1:2d}: Label={label_idx}, Class='{class_name}'\n")
+        
+        f.write(f"\nCIFAR-10 Classes Reference:\n")
+        for idx, class_name in enumerate(CIFAR10_CLASSES):
+            f.write(f"  {idx}: {class_name}\n")
+    
+    print(f"🔍 Debug samples saved: {debug_path}")
+    print(f"📝 Debug info saved: {txt_path}")
 
 def get_distributed_dataloader(config: DistributedTrainingConfig, world_size: int, rank: int):
     """Create distributed dataloader for CIFAR-10"""
@@ -327,6 +410,7 @@ def train_distributed(config: DistributedTrainingConfig):
     model.train()
     step = 0
     best_loss = float('inf')
+    debug_samples_saved = False  # Track if we've saved debug samples this session
     
     # Progress bar only on rank 0
     pbar = tqdm(total=total_steps, desc="Distributed DiT Training", disable=(rank != 0))
@@ -347,6 +431,14 @@ def train_distributed(config: DistributedTrainingConfig):
             labels = batch['labels'].to(device, non_blocking=True)
             noise = torch.randn_like(clean_images)
             batch_size = clean_images.shape[0]
+            
+            # Save debug samples for data verification (first few batches of this session)
+            if config.save_debug_samples and not debug_samples_saved and epoch_steps < 3:  # Save first 3 batches of current session
+                save_debug_samples(clean_images[:config.debug_samples_count], 
+                                 labels[:config.debug_samples_count], 
+                                 epoch, epoch_steps, config.checkpoint_dir, rank)
+                if epoch_steps >= 2:  # Mark as saved after 3 batches (0, 1, 2)
+                    debug_samples_saved = True
             
             # Sample random timesteps
             timesteps = torch.randint(
