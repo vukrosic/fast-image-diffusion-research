@@ -148,7 +148,7 @@ def load_checkpoint(checkpoint_path, model, optimizers, schedulers, device, rank
     
     print_rank0(f"📥 Loading checkpoint from {checkpoint_path}", rank)
     
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     
     # Load model state
     model.module.load_state_dict(checkpoint['model_state_dict'])

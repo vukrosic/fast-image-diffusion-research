@@ -80,7 +80,7 @@ def load_model_and_config(checkpoint_dir):
     config_path = os.path.join(checkpoint_dir, 'config.pth')
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Config file not found: {config_path}")
-    config = torch.load(config_path, map_location=device)
+    config = torch.load(config_path, map_location=device, weights_only=False)
     
     # Create model
     model = DiT(
@@ -100,7 +100,7 @@ def load_model_and_config(checkpoint_dir):
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file not found: {model_path}")
     
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=False))
     model = model.to(device)
     model.eval()
     
