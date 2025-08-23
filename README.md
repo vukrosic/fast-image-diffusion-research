@@ -1,5 +1,9 @@
 # Fast Image Diffusion Research
 
+I recommend using this in AI code IDE and asking it questions about it.
+
+Gemini CLI or Client + Cerebras is free.
+
 A fast implementation of diffusion models for CIFAR-10 image generation using DiT (Diffusion Transformer) architecture.
 
 ## Quick Start
