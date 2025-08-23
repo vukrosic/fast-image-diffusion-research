@@ -82,7 +82,25 @@ def load_model_and_config(checkpoint_dir):
     latest_checkpoint_path = os.path.join(checkpoint_dir, 'latest_checkpoint.pth')
     if os.path.exists(latest_checkpoint_path):
         print(f"📥 Loading distributed training checkpoint from {latest_checkpoint_path}")
-        checkpoint = torch.load(latest_checkpoint_path, map_location=device, weights_only=False)
+        
+        # Load checkpoint with custom class mapping to avoid DistributedTrainingConfig issues
+        try:
+            # Temporarily add DistributedTrainingConfig to globals to avoid loading errors
+            import train_distributed
+            sys.modules['__main__'].DistributedTrainingConfig = train_distributed.DistributedTrainingConfig
+            
+            checkpoint = torch.load(latest_checkpoint_path, map_location=device, weights_only=False)
+            
+            # Clean up the temporary class
+            if 'DistributedTrainingConfig' in sys.modules['__main__'].__dict__:
+                del sys.modules['__main__'].DistributedTrainingConfig
+                
+        except Exception as e:
+            print(f"⚠️  Failed to load checkpoint with class mapping: {e}")
+            print("🔄 Trying alternative loading method...")
+            
+            # Try loading just the model weights directly
+            checkpoint = torch.load(latest_checkpoint_path, map_location=device, weights_only=False, pickle_module=torch._utils._rebuild_tensor_v2)
         
         # Extract config from checkpoint
         config = checkpoint.get('config')
