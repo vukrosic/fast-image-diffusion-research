@@ -121,8 +121,8 @@ def save_checkpoint(model, optimizers, schedulers, epoch, config, checkpoint_dir
         
         checkpoint = {
             'model_state_dict': model.module.state_dict(),
-            'optimizer_state_dict': optimizers.state_dict(),
-            'scheduler_state_dict': schedulers.state_dict() if schedulers else None,
+            'optimizer_state_dict': [opt.state_dict() for opt in optimizers],
+            'scheduler_state_dict': [sch.state_dict() for sch in schedulers] if schedulers else None,
             'epoch': epoch,
             'config': config,
         }
@@ -155,11 +155,17 @@ def load_checkpoint(checkpoint_path, model, optimizers, schedulers, device, rank
     
     # Load optimizer state
     if optimizers and 'optimizer_state_dict' in checkpoint:
-        optimizers.load_state_dict(checkpoint['optimizer_state_dict'])
+        optimizer_states = checkpoint['optimizer_state_dict']
+        for i, opt in enumerate(optimizers):
+            if i < len(optimizer_states):
+                opt.load_state_dict(optimizer_states[i])
     
     # Load scheduler state
     if schedulers and 'scheduler_state_dict' in checkpoint and checkpoint['scheduler_state_dict']:
-        schedulers.load_state_dict(checkpoint['scheduler_state_dict'])
+        scheduler_states = checkpoint['scheduler_state_dict']
+        for i, sch in enumerate(schedulers):
+            if i < len(scheduler_states):
+                sch.load_state_dict(scheduler_states[i])
     
     epoch = checkpoint.get('epoch', 0)
     print_rank0(f"✅ Resumed from epoch {epoch}", rank)
