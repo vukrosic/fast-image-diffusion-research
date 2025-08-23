@@ -48,10 +48,19 @@ class DistributedTrainingConfig(TrainingConfig):
     world_size: int = 8  # Number of GPUs
     local_rank: int = 0  # Will be set by launcher
     
-    # Adjusted for distributed training
-    train_batch_size = 32  # Per GPU batch size (total = 32 * 8 = 256)
-    eval_batch_size = 16   # Per GPU eval batch size
+    # Adjusted for distributed training - increased to better utilize 24GB RTX 4090s
+    train_batch_size = 96  # Per GPU batch size (total = 96 * 8 = 768) 
+    eval_batch_size = 48   # Per GPU eval batch size
     gradient_accumulation_steps = 1  # Keep as 1 since we have more GPUs
+    
+    # Increased model size to utilize more GPU memory
+    hidden_size = 1024    # Increased from 768 to 1024
+    num_layers = 16       # Increased from 12 to 16 layers
+    num_heads = 16        # Increased from 12 to 16 heads
+    
+    # Memory optimization settings
+    use_compile = True    # Enable torch.compile for better performance
+    enable_amp = True     # Mixed precision training for memory efficiency
     
     # Optimize for RTX 4090s
     num_epochs = 5  # Reduced since we have 8x compute power
