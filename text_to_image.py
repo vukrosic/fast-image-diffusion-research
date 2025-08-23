@@ -15,6 +15,8 @@ from PIL import Image
 import os
 from train import TrainingConfig, CIFAR10_CLASSES, DiT, get_noise_scheduler
 import diffusers
+import sys
+import importlib.util
 
 # Word mappings to CIFAR-10 classes
 WORD_MAPPINGS = {
@@ -91,6 +93,25 @@ def load_model_and_config(checkpoint_dir):
                 config = torch.load(config_path, map_location=device, weights_only=False)
             else:
                 raise FileNotFoundError(f"Config not found in checkpoint or separate file")
+        
+        # Handle distributed training config if it's a DistributedTrainingConfig
+        if hasattr(config, '__class__') and config.__class__.__name__ == 'DistributedTrainingConfig':
+            print("🔄 Converting DistributedTrainingConfig to TrainingConfig for inference...")
+            # Create a new TrainingConfig with the same parameters
+            from train import TrainingConfig
+            base_config = TrainingConfig()
+            # Copy relevant attributes
+            for attr in ['image_size', 'patch_size', 'hidden_size', 'num_layers', 
+                        'num_heads', 'mlp_ratio', 'dropout', 'num_classes', 'cfg_scale']:
+                if hasattr(config, attr):
+                    setattr(base_config, attr, getattr(config, attr))
+            config = base_config
+        
+        # If config is still problematic, try to create a default config
+        if not hasattr(config, 'image_size') or not hasattr(config, 'hidden_size'):
+            print("⚠️  Config appears to be corrupted, using default values...")
+            from train import TrainingConfig
+            config = TrainingConfig()
         
         # Create model
         model = DiT(
