@@ -48,9 +48,9 @@ class DistributedTrainingConfig(TrainingConfig):
     world_size: int = 8  # Number of GPUs
     local_rank: int = 0  # Will be set by launcher
     
-        # Adjusted for distributed training - balanced for memory and performance
-    train_batch_size = 128  # Per GPU batch size (total = 128 * 8 = 1024)
-    eval_batch_size = 64    # Per GPU eval batch size
+        # Adjusted for distributed training - 50% larger batch for better convergence
+    train_batch_size = 192  # Per GPU batch size (total = 192 * 8 = 1536) - 50% larger
+    eval_batch_size = 96    # Per GPU eval batch size
     gradient_accumulation_steps = 1  # Keep as 1 since we have more GPUs
     
     # Increased model size to utilize more GPU memory
@@ -64,7 +64,7 @@ class DistributedTrainingConfig(TrainingConfig):
     use_gradient_checkpointing = True  # Trade compute for memory
     
     # Extended training for better convergence
-    num_epochs = 50  # Increased 10x for longer training (was 5)
+    num_epochs = 100  # Increased 10x for longer training (was 5)
     
     # Resume training settings
     resume_from_checkpoint = ""  # Path to checkpoint directory to resume from
