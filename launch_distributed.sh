@@ -2,7 +2,7 @@
 # Launch script for distributed training on 8x RTX 4090 GPUs
 
 echo "🚀 Launching Distributed Training on 8x RTX 4090 GPUs"
-echo "📊 Total batch size: 2048 (256 per GPU)"
+echo "📊 Total batch size: 1024 (128 per GPU)"
 echo "⚡ Using PyTorch DistributedDataParallel (DDP)"
 
 # Check if GPUs are available

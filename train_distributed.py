@@ -48,9 +48,9 @@ class DistributedTrainingConfig(TrainingConfig):
     world_size: int = 8  # Number of GPUs
     local_rank: int = 0  # Will be set by launcher
     
-    # Adjusted for distributed training - increased to better utilize 24GB RTX 4090s
-    train_batch_size = 256  # Per GPU batch size (total = 256 * 8 = 2048) 
-    eval_batch_size = 128   # Per GPU eval batch size
+        # Adjusted for distributed training - balanced for memory and performance
+    train_batch_size = 128  # Per GPU batch size (total = 128 * 8 = 1024)
+    eval_batch_size = 64    # Per GPU eval batch size
     gradient_accumulation_steps = 1  # Keep as 1 since we have more GPUs
     
     # Increased model size to utilize more GPU memory
@@ -61,6 +61,7 @@ class DistributedTrainingConfig(TrainingConfig):
     # Memory optimization settings
     use_compile = True    # Enable torch.compile for better performance
     enable_amp = True     # Mixed precision training for memory efficiency
+    use_gradient_checkpointing = True  # Trade compute for memory
     
     # Extended training for better convergence
     num_epochs = 50  # Increased 10x for longer training (was 5)
@@ -311,6 +312,10 @@ def train_distributed(config: DistributedTrainingConfig):
         if checkpoint_path:
             print_rank0("🔄 Found existing checkpoint, resuming automatically...", rank)
             start_epoch = load_checkpoint(checkpoint_path, model, optimizers, schedulers, device, rank)
+    
+    # Clear cache after checkpoint loading
+    torch.cuda.empty_cache()
+    print_rank0(f"🧹 GPU memory cleared after checkpoint loading", rank)
     
     # Compile model for better performance (only on rank 0 to avoid issues)
     if config.compile_model and rank == 0:
