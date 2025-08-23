@@ -433,8 +433,9 @@ def train_distributed(config: DistributedTrainingConfig):
             avg_epoch_loss = epoch_loss / epoch_steps
             print_rank0(f"📊 Epoch {epoch + 1} avg loss: {avg_epoch_loss:.4f}", rank)
         
-        # Save checkpoint after each epoch
-        save_checkpoint(model, optimizers, schedulers, epoch, config, config.checkpoint_dir, rank)
+        # Save checkpoint every 20 epochs
+        if (epoch + 1) % 20 == 0:
+            save_checkpoint(model, optimizers, schedulers, epoch, config, config.checkpoint_dir, rank)
         
         if step >= total_steps:
             break
