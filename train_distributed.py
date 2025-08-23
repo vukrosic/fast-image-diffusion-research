@@ -64,7 +64,7 @@ class DistributedTrainingConfig(TrainingConfig):
     use_gradient_checkpointing = True  # Trade compute for memory
     
     # Extended training for better convergence
-    num_epochs = 150  # Increased 10x for longer training (was 5)
+    num_epochs = 200  # Increased 10x for longer training (was 5)
     
     # Resume training settings
     resume_from_checkpoint = ""  # Path to checkpoint directory to resume from
