@@ -13,8 +13,7 @@ import torch
 import torchvision
 from PIL import Image
 import os
-from inference import load_model_and_config, generate_images, save_image_grid
-from train import TrainingConfig, CIFAR10_CLASSES
+from train import TrainingConfig, CIFAR10_CLASSES, DiT, get_noise_scheduler
 import diffusers
 
 # Word mappings to CIFAR-10 classes
@@ -71,6 +70,71 @@ def map_word_to_class(word):
     
     # Return None if no match found
     return None
+
+def load_model_and_config(checkpoint_dir):
+    """Load trained model and config from checkpoint directory"""
+    import torch
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # Load config
+    config_path = os.path.join(checkpoint_dir, 'config.pth')
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    config = torch.load(config_path, map_location=device)
+    
+    # Create model
+    model = DiT(
+        input_size=config.image_size,
+        patch_size=config.patch_size,
+        in_channels=3,
+        hidden_size=config.hidden_size,
+        depth=config.num_layers,
+        num_heads=config.num_heads,
+        mlp_ratio=config.mlp_ratio,
+        dropout=config.dropout,
+        num_classes=config.num_classes
+    )
+    
+    # Load model weights
+    model_path = os.path.join(checkpoint_dir, 'dit_model.pth')
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+    
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model = model.to(device)
+    model.eval()
+    
+    return model, config, device
+
+def save_image_grid(images, filename, nrow=4):
+    """Save a grid of images"""
+    torchvision.utils.save_image(images, filename, nrow=nrow, normalize=False, value_range=(0, 1))
+
+def generate_images(model, scheduler, class_idx, num_images, cfg_scale, device):
+    """Generate images for a specific class"""
+    with torch.no_grad():
+        # Start with random noise
+        shape = (num_images, 3, model.input_size, model.input_size)
+        image = torch.randn(shape, device=device)
+        
+        # Create label tensor
+        labels = torch.full((num_images,), class_idx, device=device, dtype=torch.long)
+        
+        # Denoising loop
+        for t in scheduler.timesteps:
+            timestep = torch.full((num_images,), t, device=device, dtype=torch.long)
+            
+            # Predict noise with and without conditioning
+            noise_pred_cond = model(image, timestep, labels)
+            noise_pred_uncond = model(image, timestep, None)
+            
+            # Apply classifier-free guidance
+            noise_pred = noise_pred_uncond + cfg_scale * (noise_pred_cond - noise_pred_uncond)
+            
+            # Remove noise
+            image = scheduler.step(noise_pred, t, image).prev_sample
+    
+    return image
 
 def generate_images_from_text(prompt, num_images=4, steps=50, checkpoint_dir="cifar10_diffusion_ckpt"):
     """Generate images based on text prompt"""
