@@ -63,7 +63,7 @@ class DistributedTrainingConfig(TrainingConfig):
     enable_amp = True     # Mixed precision training for memory efficiency
     
     # Extended training for better convergence
-    num_epochs = 50  # Increased 10x for longer training (was 5)
+    num_epochs = 2  # Increased 10x for longer training (was 5)
     
     def __post_init__(self):
         super().__post_init__()
@@ -99,8 +99,16 @@ def setup_distributed():
 
 def cleanup_distributed():
     """Clean up distributed training"""
-    if dist.is_initialized():
-        dist.destroy_process_group()
+    try:
+        # Clear GPU cache before cleanup
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        
+        if dist.is_initialized():
+            dist.destroy_process_group()
+    except Exception as e:
+        # Ignore cleanup errors - they're common and usually harmless
+        pass
 
 def get_distributed_dataloader(config: DistributedTrainingConfig, world_size: int, rank: int):
     """Create distributed dataloader for CIFAR-10"""
@@ -376,11 +384,12 @@ def train_distributed(config: DistributedTrainingConfig):
                 nrow=2
             )
     
-    # Cleanup
-    cleanup_distributed()
+    # Clear model and cleanup memory before returning
+    del model, optimizers, schedulers, train_dataloader
+    torch.cuda.empty_cache()
     
     print_rank0("🎉 DISTRIBUTED TRAINING COMPLETED!", rank)
-    return model
+    return None  # Don't return model to save memory
 
 def main():
     """Main function"""
@@ -439,6 +448,8 @@ def main():
         print_rank0(f"❌ Training failed: {e}", rank)
         raise
     finally:
+        # Final cleanup
+        torch.cuda.empty_cache()
         cleanup_distributed()
 
 if __name__ == "__main__":

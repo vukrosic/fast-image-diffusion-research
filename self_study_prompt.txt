@@ -1,0 +1,1 @@
+Write a step by step markdown article explaining this. If there is code, teach me most important parts, the heart of it. Write 1 or 2 lines of code and explain it in markdown text in detail. Explain what each part or variable means and assume I know nothing. Use markdown for better visual hierarchy, so I know what to read in which order. Explain it all step by step. 
