@@ -63,7 +63,7 @@ class DistributedTrainingConfig(TrainingConfig):
     enable_amp = True     # Mixed precision training for memory efficiency
     
     # Extended training for better convergence
-    num_epochs = 5  # Increased 10x for longer training (was 5)
+    num_epochs = 50  # Increased 10x for longer training (was 5)
     
     # Resume training settings
     resume_from_checkpoint = ""  # Path to checkpoint directory to resume from
