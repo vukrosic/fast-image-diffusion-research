@@ -65,6 +65,10 @@ class DistributedTrainingConfig(TrainingConfig):
     # Extended training for better convergence
     num_epochs = 50  # Increased 10x for longer training (was 5)
     
+    # Resume training settings
+    resume_from_checkpoint = ""  # Path to checkpoint directory to resume from
+    checkpoint_dir = "cifar10_diffusion_distributed_ckpt"  # Where to save checkpoints
+    
     def __post_init__(self):
         super().__post_init__()
         # Set local rank from environment if available
@@ -109,6 +113,73 @@ def cleanup_distributed():
     except Exception as e:
         # Ignore cleanup errors - they're common and usually harmless
         pass
+
+def save_checkpoint(model, optimizers, schedulers, epoch, config, checkpoint_dir, rank):
+    """Save complete checkpoint including model, optimizer, and scheduler states"""
+    if rank == 0:  # Only save from rank 0
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        checkpoint = {
+            'model_state_dict': model.module.state_dict(),
+            'optimizer_state_dict': optimizers.state_dict(),
+            'scheduler_state_dict': schedulers.state_dict() if schedulers else None,
+            'epoch': epoch,
+            'config': config,
+        }
+        
+        checkpoint_path = os.path.join(checkpoint_dir, f'checkpoint_epoch_{epoch}.pth')
+        torch.save(checkpoint, checkpoint_path)
+        
+        # Also save as latest checkpoint
+        latest_path = os.path.join(checkpoint_dir, 'latest_checkpoint.pth')
+        torch.save(checkpoint, latest_path)
+        
+        # Save model and config separately for compatibility with text_to_image.py
+        torch.save(model.module.state_dict(), os.path.join(checkpoint_dir, "dit_model.pth"))
+        torch.save(config, os.path.join(checkpoint_dir, "config.pth"))
+        
+        print(f"💾 Checkpoint saved at epoch {epoch} to {checkpoint_dir}")
+
+def load_checkpoint(checkpoint_path, model, optimizers, schedulers, device, rank):
+    """Load checkpoint and restore model, optimizer, and scheduler states"""
+    if not os.path.exists(checkpoint_path):
+        print_rank0(f"❌ Checkpoint not found: {checkpoint_path}", rank)
+        return 0
+    
+    print_rank0(f"📥 Loading checkpoint from {checkpoint_path}", rank)
+    
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    
+    # Load model state
+    model.module.load_state_dict(checkpoint['model_state_dict'])
+    
+    # Load optimizer state
+    if optimizers and 'optimizer_state_dict' in checkpoint:
+        optimizers.load_state_dict(checkpoint['optimizer_state_dict'])
+    
+    # Load scheduler state
+    if schedulers and 'scheduler_state_dict' in checkpoint and checkpoint['scheduler_state_dict']:
+        schedulers.load_state_dict(checkpoint['scheduler_state_dict'])
+    
+    epoch = checkpoint.get('epoch', 0)
+    print_rank0(f"✅ Resumed from epoch {epoch}", rank)
+    
+    return epoch + 1  # Return next epoch to continue from
+
+def find_latest_checkpoint(checkpoint_dir):
+    """Find the latest checkpoint in the directory"""
+    latest_path = os.path.join(checkpoint_dir, 'latest_checkpoint.pth')
+    if os.path.exists(latest_path):
+        return latest_path
+    
+    # Fallback: look for numbered checkpoints
+    checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.startswith('checkpoint_epoch_') and f.endswith('.pth')]
+    if checkpoint_files:
+        # Sort by epoch number
+        checkpoint_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
+        return os.path.join(checkpoint_dir, checkpoint_files[-1])
+    
+    return None
 
 def get_distributed_dataloader(config: DistributedTrainingConfig, world_size: int, rank: int):
     """Create distributed dataloader for CIFAR-10"""
@@ -218,6 +289,23 @@ def train_distributed(config: DistributedTrainingConfig):
     
     print_rank0(f"🔥 Using mixed precision: {config.mixed_precision}, autocast: {use_autocast}", rank)
     
+    # Check for resume checkpoint
+    start_epoch = 0
+    if config.resume_from_checkpoint:
+        checkpoint_path = config.resume_from_checkpoint
+        if os.path.isdir(checkpoint_path):
+            checkpoint_path = find_latest_checkpoint(checkpoint_path)
+        if checkpoint_path:
+            start_epoch = load_checkpoint(checkpoint_path, model, optimizers, schedulers, device, rank)
+        else:
+            print_rank0(f"⚠️  No checkpoint found at {config.resume_from_checkpoint}, starting from scratch", rank)
+    elif os.path.exists(config.checkpoint_dir):
+        # Auto-resume from latest checkpoint if available
+        checkpoint_path = find_latest_checkpoint(config.checkpoint_dir)
+        if checkpoint_path:
+            print_rank0("🔄 Found existing checkpoint, resuming automatically...", rank)
+            start_epoch = load_checkpoint(checkpoint_path, model, optimizers, schedulers, device, rank)
+    
     # Compile model for better performance (only on rank 0 to avoid issues)
     if config.compile_model and rank == 0:
         print_rank0("🔥 Compiling model with torch.compile...", rank)
@@ -234,7 +322,7 @@ def train_distributed(config: DistributedTrainingConfig):
     
     start_time = time.time()
     
-    for epoch in range(config.num_epochs):
+    for epoch in range(start_epoch, config.num_epochs):
         print_rank0(f"\n📅 Epoch {epoch + 1}/{config.num_epochs}", rank)
         
         # Set epoch for DistributedSampler
@@ -339,6 +427,9 @@ def train_distributed(config: DistributedTrainingConfig):
             avg_epoch_loss = epoch_loss / epoch_steps
             print_rank0(f"📊 Epoch {epoch + 1} avg loss: {avg_epoch_loss:.4f}", rank)
         
+        # Save checkpoint after each epoch
+        save_checkpoint(model, optimizers, schedulers, epoch, config, config.checkpoint_dir, rank)
+        
         if step >= total_steps:
             break
     
@@ -349,16 +440,10 @@ def train_distributed(config: DistributedTrainingConfig):
     print_rank0(f"⏱️ Training completed in {training_time/60:.1f} minutes", rank)
     print_rank0(f"🏆 Best loss: {best_loss:.4f}", rank)
     
-    # Save model (only from rank 0)
+    # Final save model (only from rank 0)
     if rank == 0:
-        print_rank0("💾 Saving model...", rank)
-        os.makedirs("cifar10_diffusion_distributed_ckpt", exist_ok=True)
-        
-        # Save the underlying model (not the DDP wrapper)
-        torch.save(model.module.state_dict(), "cifar10_diffusion_distributed_ckpt/dit_model.pth")
-        torch.save(config, "cifar10_diffusion_distributed_ckpt/config.pth")
-        
-        print_rank0("💾 Model saved to cifar10_diffusion_distributed_ckpt/", rank)
+        print_rank0("💾 Saving final model...", rank)
+        save_checkpoint(model, optimizers, schedulers, config.num_epochs - 1, config, config.checkpoint_dir, rank)
         
         # Demo: Generate samples for a few classes
         print_rank0("\n🎨 Generating sample images...", rank)
@@ -378,7 +463,7 @@ def train_distributed(config: DistributedTrainingConfig):
             # Save sample
             torchvision.utils.save_image(
                 samples,
-                f"cifar10_diffusion_distributed_ckpt/sample_{CIFAR10_CLASSES[class_idx]}.png",
+                f"{config.checkpoint_dir}/sample_{CIFAR10_CLASSES[class_idx]}.png",
                 normalize=True,
                 value_range=(-1, 1),
                 nrow=2
