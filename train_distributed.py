@@ -49,7 +49,7 @@ class DistributedTrainingConfig(TrainingConfig):
     local_rank: int = 0  # Will be set by launcher
     
     # Adjusted for distributed training - increased to better utilize 24GB RTX 4090s
-    train_batch_size = 256  # Per GPU batch size (total = 96 * 8 = 768) 
+    train_batch_size = 256  # Per GPU batch size (total = 256 * 8 = 2048) 
     eval_batch_size = 128   # Per GPU eval batch size
     gradient_accumulation_steps = 1  # Keep as 1 since we have more GPUs
     
@@ -62,8 +62,8 @@ class DistributedTrainingConfig(TrainingConfig):
     use_compile = True    # Enable torch.compile for better performance
     enable_amp = True     # Mixed precision training for memory efficiency
     
-    # Optimize for RTX 4090s
-    num_epochs = 5  # Reduced since we have 8x compute power
+    # Extended training for better convergence
+    num_epochs = 50  # Increased 10x for longer training (was 5)
     
     def __post_init__(self):
         super().__post_init__()
